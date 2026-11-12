@@ -23,6 +23,7 @@ package com.yervant.huntmem.ui
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.BorderStroke
@@ -139,6 +140,7 @@ fun MainScreen(
     var isHmkpmReady by remember { mutableStateOf<Boolean?>(null) }
     var hmkpmVersion by remember { mutableStateOf<com.yervant.huntmem.backend.NativeBridge.HmkpmVersion?>(null) }
     var hmkpmRefreshTrigger by remember { mutableIntStateOf(0) }
+    var rootRefreshTrigger by remember { mutableIntStateOf(0) }
     var showHmkpmInfoDialog by remember { mutableStateOf(false) }
     var showOemInfoDialog by remember { mutableStateOf(false) }
     var isRootGranted by remember { mutableStateOf<Boolean?>(null) }
@@ -170,11 +172,14 @@ fun MainScreen(
     val attachedPid by AttachedProcessRepository.attachedProcessPid.collectAsState()
     val isRootServiceConnected by HMemServiceConnection.isConnected.collectAsState()
 
-    LaunchedEffect(Unit) {
+    // 核心修改点：响应 rootRefreshTrigger，支持前台用户点击强制申请 Root
+    LaunchedEffect(rootRefreshTrigger) {
+        isRootGranted = null
         val rootResult = withContext(Dispatchers.IO) {
             try {
                 Shell.isAppGrantedRoot() ?: Shell.getShell().isRoot
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                Log.e("MainScreen", "Root request failed: ${e.message}", e)
                 false
             }
         }
@@ -329,456 +334,464 @@ fun MainScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                Text(
-                    text = stringResource(id = R.string.main_screen_overview_title),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    letterSpacing = 1.sp
-                )
-
-                // Row 1 of 2x2 Grid
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CompactStatusCard(
-                        icon = Icons.Default.Security,
-                        title = stringResource(id = R.string.main_screen_status_root_access),
-                        statusText = when (isRootGranted) {
-                            true -> stringResource(id = R.string.main_screen_status_root_granted)
-                            false -> stringResource(id = R.string.main_screen_status_root_missing)
-                            null -> stringResource(id = R.string.main_screen_status_root_checking)
-                        },
-                        isOk = isRootGranted == true,
-                        isLoading = isRootGranted == null,
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = stringResource(id = R.string.main_screen_overview_title),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        letterSpacing = 1.sp
                     )
 
-                    val isHmkpmLockless = isHmkpmReady == true && (hmkpmVersion?.isLockless == true || hmkpmVersion?.supportsWrite == false)
-                    CompactStatusCard(
-                        icon = Icons.Default.Memory,
-                        title = stringResource(id = R.string.main_screen_status_kernelpatch),
-                        statusText = when {
-                            isCheckingHmkpm -> stringResource(id = R.string.main_screen_hmkpm_checking)
-                            isHmkpmReady == true -> {
-                                val verStr = hmkpmVersion?.versionStr
-                                when {
-                                    isHmkpmLockless && !verStr.isNullOrBlank() -> "v$verStr (${stringResource(id = R.string.main_screen_hmkpm_lockless_tag)})"
-                                    isHmkpmLockless -> stringResource(id = R.string.main_screen_hmkpm_lockless)
-                                    !verStr.isNullOrBlank() -> "v$verStr"
-                                    else -> stringResource(id = R.string.main_screen_hmkpm_available)
-                                }
-                            }
-                            else -> stringResource(id = R.string.main_screen_hmkpm_not_available)
-                        },
-                        isOk = isHmkpmReady == true,
-                        isWarning = isHmkpmLockless,
-                        isLoading = isCheckingHmkpm,
-                        onClick = if (isHmkpmReady == true) {
-                            { showHmkpmInfoDialog = true }
-                        } else null,
-                        onRefresh = if (isRootGranted == true) {
-                            { if (!isCheckingHmkpm) hmkpmRefreshTrigger++ }
-                        } else null,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // Row 2 of 2x2 Grid
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val isOverlayOk = hasOverlayPermission && (!OemCompatibilityHelper.isXiaomi() || hasPopupPermission)
-                    val isOverlayWarning = hasOverlayPermission && OemCompatibilityHelper.isXiaomi() && !hasPopupPermission
-
-                    CompactStatusCard(
-                        icon = Icons.Default.Tune,
-                        title = stringResource(id = R.string.main_screen_status_overlay_engine),
-                        statusText = when {
-                            !hasOverlayPermission -> stringResource(id = R.string.main_screen_status_overlay_permission_missing)
-                            isOverlayWarning -> stringResource(id = R.string.main_screen_status_popup_permission_missing)
-                            isServiceRunning -> stringResource(id = R.string.main_screen_status_overlay_active)
-                            else -> stringResource(id = R.string.main_screen_status_overlay_permission_granted)
-                        },
-                        isOk = isOverlayOk,
-                        isWarning = isOverlayWarning,
-                        isLoading = false,
-                        onClick = openOverlaySettings,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    CompactStatusCard(
-                        icon = Icons.Default.PlayArrow,
-                        title = stringResource(id = R.string.main_screen_status_target_process),
-                        statusText = if (attachedPid != null) {
-                            stringResource(id = R.string.main_screen_status_target_pid, attachedPid!!)
-                        } else {
-                            stringResource(id = R.string.main_screen_status_target_none)
-                        },
-                        isOk = attachedPid != null,
-                        isLoading = false,
-                        isMonospace = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // Lockless Mode Informative Banner
-                val isHmkpmLockless = isHmkpmReady == true && (hmkpmVersion?.isLockless == true || hmkpmVersion?.supportsWrite == false)
-                if (isHmkpmLockless) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { showHmkpmInfoDialog = true },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = TertiaryAmber.copy(alpha = 0.12f)
-                        ),
-                        border = BorderStroke(1.dp, TertiaryAmber.copy(alpha = 0.45f))
+                    // Row 1 of 2x2 Grid (Root 卡片支持点击和刷新)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        CompactStatusCard(
+                            icon = Icons.Default.Security,
+                            title = stringResource(id = R.string.main_screen_status_root_access),
+                            statusText = when (isRootGranted) {
+                                true -> stringResource(id = R.string.main_screen_status_root_granted)
+                                false -> stringResource(id = R.string.main_screen_status_root_missing)
+                                null -> stringResource(id = R.string.main_screen_status_root_checking)
+                            },
+                            isOk = isRootGranted == true,
+                            isLoading = isRootGranted == null,
+                            onClick = {
+                                if (isRootGranted != true) {
+                                    rootRefreshTrigger++
+                                }
+                            },
+                            onRefresh = {
+                                rootRefreshTrigger++
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        val isHmkpmLockless = isHmkpmReady == true && (hmkpmVersion?.isLockless == true || hmkpmVersion?.supportsWrite == false)
+                        CompactStatusCard(
+                            icon = Icons.Default.Memory,
+                            title = stringResource(id = R.string.main_screen_status_kernelpatch),
+                            statusText = when {
+                                isCheckingHmkpm -> stringResource(id = R.string.main_screen_hmkpm_checking)
+                                isHmkpmReady == true -> {
+                                    val verStr = hmkpmVersion?.versionStr
+                                    when {
+                                        isHmkpmLockless && !verStr.isNullOrBlank() -> "v$verStr (${stringResource(id = R.string.main_screen_hmkpm_lockless_tag)})"
+                                        isHmkpmLockless -> stringResource(id = R.string.main_screen_hmkpm_lockless)
+                                        !verStr.isNullOrBlank() -> "v$verStr"
+                                        else -> stringResource(id = R.string.main_screen_hmkpm_available)
+                                    }
+                                }
+                                else -> stringResource(id = R.string.main_screen_hmkpm_not_available)
+                            },
+                            isOk = isHmkpmReady == true,
+                            isWarning = isHmkpmLockless,
+                            isLoading = isCheckingHmkpm,
+                            onClick = if (isHmkpmReady == true) {
+                                { showHmkpmInfoDialog = true }
+                            } else null,
+                            onRefresh = if (isRootGranted == true) {
+                                { if (!isCheckingHmkpm) hmkpmRefreshTrigger++ }
+                            } else null,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Row 2 of 2x2 Grid
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val isOverlayOk = hasOverlayPermission && (!OemCompatibilityHelper.isXiaomi() || hasPopupPermission)
+                        val isOverlayWarning = hasOverlayPermission && OemCompatibilityHelper.isXiaomi() && !hasPopupPermission
+
+                        CompactStatusCard(
+                            icon = Icons.Default.Tune,
+                            title = stringResource(id = R.string.main_screen_status_overlay_engine),
+                            statusText = when {
+                                !hasOverlayPermission -> stringResource(id = R.string.main_screen_status_overlay_permission_missing)
+                                isOverlayWarning -> stringResource(id = R.string.main_screen_status_popup_permission_missing)
+                                isServiceRunning -> stringResource(id = R.string.main_screen_status_overlay_active)
+                                else -> stringResource(id = R.string.main_screen_status_overlay_permission_granted)
+                            },
+                            isOk = isOverlayOk,
+                            isWarning = isOverlayWarning,
+                            isLoading = false,
+                            onClick = openOverlaySettings,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        CompactStatusCard(
+                            icon = Icons.Default.PlayArrow,
+                            title = stringResource(id = R.string.main_screen_status_target_process),
+                            statusText = if (attachedPid != null) {
+                                stringResource(id = R.string.main_screen_status_target_pid, attachedPid!!)
+                            } else {
+                                stringResource(id = R.string.main_screen_status_target_none)
+                            },
+                            isOk = attachedPid != null,
+                            isLoading = false,
+                            isMonospace = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Lockless Mode Informative Banner
+                    val isHmkpmLockless = isHmkpmReady == true && (hmkpmVersion?.isLockless == true || hmkpmVersion?.supportsWrite == false)
+                    if (isHmkpmLockless) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { showHmkpmInfoDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = TertiaryAmber.copy(alpha = 0.12f)
+                            ),
+                            border = BorderStroke(1.dp, TertiaryAmber.copy(alpha = 0.45f))
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = TertiaryAmber.copy(alpha = 0.20f),
-                                modifier = Modifier.size(32.dp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Shield,
-                                        contentDescription = null,
-                                        tint = TertiaryAmber,
-                                        modifier = Modifier.size(18.dp)
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = TertiaryAmber.copy(alpha = 0.20f),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Shield,
+                                            contentDescription = null,
+                                            tint = TertiaryAmber,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(id = R.string.lockless_banner_title),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TertiaryAmber
+                                    )
+                                    Text(
+                                        text = stringResource(id = R.string.lockless_banner_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { showHmkpmInfoDialog = true },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(id = R.string.lockless_dialog_learn_more),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TertiaryAmber
                                     )
                                 }
                             }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(id = R.string.lockless_banner_title),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TertiaryAmber
+                        }
+                    }
+                }
+
+                // OEM System Compatibility & Background Optimization Banner
+                if (OemCompatibilityHelper.isCustomOem() || !isIgnoringBattery) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.25f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.40f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.20f),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Tune,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(
+                                            id = R.string.oem_compat_banner_title,
+                                            OemCompatibilityHelper.currentRomType.displayName
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                    Text(
+                                        text = if (OemCompatibilityHelper.isXiaomi()) {
+                                            stringResource(id = R.string.oem_compat_hyperos_desc)
+                                        } else {
+                                            stringResource(id = R.string.oem_compat_battery_desc)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { showOemInfoDialog = true },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(id = R.string.lockless_dialog_learn_more),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+
+                            // Granular OEM Permission Verification Rows
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (OemCompatibilityHelper.isXiaomi()) {
+                                        OemPermissionRow(
+                                            name = stringResource(id = R.string.oem_compat_item_popup),
+                                            isGranted = hasPopupPermission,
+                                            actionText = stringResource(id = R.string.oem_compat_btn_overlay),
+                                            onAction = { OemCompatibilityHelper.openOverlayPermissionSettings(ctx) }
+                                        )
+                                    }
+
+                                    if (OemCompatibilityHelper.isCustomOem()) {
+                                        OemPermissionRow(
+                                            name = stringResource(id = R.string.oem_compat_item_autostart),
+                                            isGranted = if (OemCompatibilityHelper.isXiaomi()) hasAutostartPermission else isIgnoringBattery,
+                                            actionText = stringResource(id = R.string.oem_compat_btn_autostart),
+                                            onAction = { OemCompatibilityHelper.openAutostartSettings(ctx) }
+                                        )
+                                    }
+
+                                    OemPermissionRow(
+                                        name = stringResource(id = R.string.oem_compat_item_battery),
+                                        isGranted = isIgnoringBattery,
+                                        actionText = stringResource(id = R.string.oem_compat_btn_battery),
+                                        onAction = { OemCompatibilityHelper.requestIgnoreBatteryOptimizations(ctx) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Middle Section: Hero Start / Stop Button
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (!isServiceRunning) {
+                        Button(
+                            onClick = {
+                                if (isRootGranted != true) {
+                                    rootRefreshTrigger++
+                                    Toast.makeText(ctx, "正在申请 Root 权限...", Toast.LENGTH_SHORT).show()
+                                } else if (!hasOverlayPermission) {
+                                    val overlayDeniedMsg = ctx.getString(R.string.main_activity_permission_overlay_denied)
+                                    Toast.makeText(ctx, overlayDeniedMsg, Toast.LENGTH_SHORT).show()
+                                    openOverlaySettings()
+                                } else if (OemCompatibilityHelper.isXiaomi() && !hasPopupPermission) {
+                                    val popupDeniedMsg = ctx.getString(R.string.main_activity_permission_popup_denied)
+                                    Toast.makeText(ctx, popupDeniedMsg, Toast.LENGTH_LONG).show()
+                                    openOverlaySettings()
+                                } else {
+                                    val serviceIntent = Intent(ctx, OverlayService::class.java)
+                                    ctx.startForegroundService(serviceIntent)
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(ComponentStyles.ActionButton.height),
+                            shape = ComponentStyles.ActionButton.shape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = ComponentStyles.ActionButton.elevation)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(ComponentStyles.ActionButton.iconSize)
                                 )
                                 Text(
-                                    text = stringResource(id = R.string.lockless_banner_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = stringResource(id = R.string.main_screen_start_hunting_button),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
-                            TextButton(
-                                onClick = { showHmkpmInfoDialog = true },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                val stopIntent = Intent(ctx, OverlayService::class.java)
+                                ctx.stopService(stopIntent)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(ComponentStyles.ActionButton.height),
+                            shape = ComponentStyles.ActionButton.shape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = ComponentStyles.ActionButton.elevation)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                Icon(
+                                    Icons.Default.Stop,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(ComponentStyles.ActionButton.iconSize)
+                                )
                                 Text(
-                                    text = stringResource(id = R.string.lockless_dialog_learn_more),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TertiaryAmber
+                                    text = stringResource(id = R.string.main_screen_stop_hunting_button),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
                     }
                 }
-            }
 
-            // OEM System Compatibility & Background Optimization Banner
-            if (OemCompatibilityHelper.isCustomOem() || !isIgnoringBattery) {
+                // Bottom Section: Community & Tech Architecture Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.25f)
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
                     ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.40f))
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.20f),
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.secondary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(
-                                        id = R.string.oem_compat_banner_title,
-                                        OemCompatibilityHelper.currentRomType.displayName
-                                    ),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                                Text(
-                                    text = if (OemCompatibilityHelper.isXiaomi()) {
-                                        stringResource(id = R.string.oem_compat_hyperos_desc)
-                                    } else {
-                                        stringResource(id = R.string.oem_compat_battery_desc)
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = { showOemInfoDialog = true },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(id = R.string.lockless_dialog_learn_more),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                        }
-
-                        // Granular OEM Permission Verification Rows
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (OemCompatibilityHelper.isXiaomi()) {
-                                    OemPermissionRow(
-                                        name = stringResource(id = R.string.oem_compat_item_popup),
-                                        isGranted = hasPopupPermission,
-                                        actionText = stringResource(id = R.string.oem_compat_btn_overlay),
-                                        onAction = { OemCompatibilityHelper.openOverlayPermissionSettings(ctx) }
-                                    )
-                                }
-
-                                if (OemCompatibilityHelper.isCustomOem()) {
-                                    OemPermissionRow(
-                                        name = stringResource(id = R.string.oem_compat_item_autostart),
-                                        isGranted = if (OemCompatibilityHelper.isXiaomi()) hasAutostartPermission else isIgnoringBattery,
-                                        actionText = stringResource(id = R.string.oem_compat_btn_autostart),
-                                        onAction = { OemCompatibilityHelper.openAutostartSettings(ctx) }
-                                    )
-                                }
-
-                                OemPermissionRow(
-                                    name = stringResource(id = R.string.oem_compat_item_battery),
-                                    isGranted = isIgnoringBattery,
-                                    actionText = stringResource(id = R.string.oem_compat_btn_battery),
-                                    onAction = { OemCompatibilityHelper.requestIgnoreBatteryOptimizations(ctx) }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Middle Section: Hero Start / Stop Button
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (!isServiceRunning) {
-                    Button(
-                        onClick = {
-                            if (isRootGranted != true) {
-                                val rootMissingMsg = ctx.getString(R.string.main_activity_error_root_access_missing)
-                                Toast.makeText(ctx, rootMissingMsg, Toast.LENGTH_SHORT).show()
-                            } else if (!hasOverlayPermission) {
-                                val overlayDeniedMsg = ctx.getString(R.string.main_activity_permission_overlay_denied)
-                                Toast.makeText(ctx, overlayDeniedMsg, Toast.LENGTH_SHORT).show()
-                                openOverlaySettings()
-                            } else if (OemCompatibilityHelper.isXiaomi() && !hasPopupPermission) {
-                                val popupDeniedMsg = ctx.getString(R.string.main_activity_permission_popup_denied)
-                                Toast.makeText(ctx, popupDeniedMsg, Toast.LENGTH_LONG).show()
-                                openOverlaySettings()
-                            } else {
-                                val serviceIntent = Intent(ctx, OverlayService::class.java)
-                                ctx.startForegroundService(serviceIntent)
-                            }
-                        },
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(ComponentStyles.ActionButton.height),
-                        shape = ComponentStyles.ActionButton.shape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = ComponentStyles.ActionButton.elevation)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                modifier = Modifier.size(ComponentStyles.ActionButton.iconSize)
-                            )
-                            Text(
-                                text = stringResource(id = R.string.main_screen_start_hunting_button),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                } else {
-                    Button(
-                        onClick = {
-                            val stopIntent = Intent(ctx, OverlayService::class.java)
-                            ctx.stopService(stopIntent)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(ComponentStyles.ActionButton.height),
-                        shape = ComponentStyles.ActionButton.shape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.error
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = ComponentStyles.ActionButton.elevation)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Stop,
-                                contentDescription = null,
-                                modifier = Modifier.size(ComponentStyles.ActionButton.iconSize)
-                            )
-                            Text(
-                                text = stringResource(id = R.string.main_screen_stop_hunting_button),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
+                        val officialChannelText = stringResource(R.string.main_screen_official_channel)
+                        val websiteText = stringResource(R.string.main_screen_website)
+                        val sourceCodeText = stringResource(R.string.main_screen_source_code)
 
-            // Bottom Section: Community & Tech Architecture Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                ),
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                        .fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val officialChannelText = stringResource(R.string.main_screen_official_channel)
-                    val websiteText = stringResource(R.string.main_screen_website)
-                    val sourceCodeText = stringResource(R.string.main_screen_source_code)
-
-                    val linkStyles = TextLinkStyles(
-                        style = SpanStyle(
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                            textDecoration = TextDecoration.Underline
+                        val linkStyles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                textDecoration = TextDecoration.Underline
+                            )
                         )
-                    )
 
-                    val annotatedString = buildAnnotatedString {
-                        withLink(
-                            link = LinkAnnotation.Url(
-                                url = "https://t.me/HuntMemory",
-                                styles = linkStyles
-                            )
-                        ) {
-                            append(officialChannelText)
+                        val annotatedString = buildAnnotatedString {
+                            withLink(
+                                link = LinkAnnotation.Url(
+                                    url = "https://t.me/HuntMemory",
+                                    styles = linkStyles
+                                )
+                            ) {
+                                append(officialChannelText)
+                            }
+                            append("  •  ")
+                            withLink(
+                                link = LinkAnnotation.Url(
+                                    url = "https://yervant7.github.io/HuntMemory/",
+                                    styles = linkStyles
+                                )
+                            ) {
+                                append(websiteText)
+                            }
+                            append("  •  ")
+                            withLink(
+                                link = LinkAnnotation.Url(
+                                    url = "https://github.com/Yervant7/HuntMemory",
+                                    styles = linkStyles
+                                )
+                            ) {
+                                append(sourceCodeText)
+                            }
                         }
-                        append("  •  ")
-                        withLink(
-                            link = LinkAnnotation.Url(
-                                url = "https://yervant7.github.io/HuntMemory/",
-                                styles = linkStyles
-                            )
-                        ) {
-                            append(websiteText)
-                        }
-                        append("  •  ")
-                        withLink(
-                            link = LinkAnnotation.Url(
-                                url = "https://github.com/Yervant7/HuntMemory",
-                                styles = linkStyles
-                            )
-                        ) {
-                            append(sourceCodeText)
-                        }
-                    }
 
-                    SelectionContainer {
+                        SelectionContainer {
+                            Text(
+                                annotatedString,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.clickable { onNavigateToCredits() }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.main_screen_credits_link),
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    textDecoration = TextDecoration.Underline,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+
                         Text(
-                            annotatedString,
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "Native Engine • Kernel Memory Bridge • ARM64-v8a",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            fontSize = 10.sp,
                             textAlign = TextAlign.Center
                         )
                     }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.clickable { onNavigateToCredits() }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.main_screen_credits_link),
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold,
-                                textDecoration = TextDecoration.Underline,
-                                fontSize = 11.sp
-                            )
-                        )
-                    }
-
-                    Text(
-                        text = "Native Engine • Kernel Memory Bridge • ARM64-v8a",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        fontSize = 10.sp,
-                        textAlign = TextAlign.Center
-                    )
                 }
             }
-        }
         }
     }
 
@@ -1394,5 +1407,3 @@ private fun OemPermissionRow(
         }
     }
 }
-
-
