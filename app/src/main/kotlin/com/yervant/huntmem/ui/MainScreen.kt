@@ -172,12 +172,18 @@ fun MainScreen(
     val attachedPid by AttachedProcessRepository.attachedProcessPid.collectAsState()
     val isRootServiceConnected by HMemServiceConnection.isConnected.collectAsState()
 
-    // 核心修改点：响应 rootRefreshTrigger，支持前台用户点击强制申请 Root
+    // 仿照 Shizuku 核心机制：完全弃用 isAppGrantedRoot 静默检测，直接调用 getShell 强制弹窗
     LaunchedEffect(rootRefreshTrigger) {
         isRootGranted = null
         val rootResult = withContext(Dispatchers.IO) {
             try {
-                Shell.isAppGrantedRoot() ?: Shell.getShell().isRoot
+                val shell = Shell.getShell()
+                if (!shell.isRoot) {
+                    Shell.getCachedShell()?.close()
+                    Shell.getShell().isRoot
+                } else {
+                    true
+                }
             } catch (e: Throwable) {
                 Log.e("MainScreen", "Root request failed: ${e.message}", e)
                 false
@@ -342,7 +348,7 @@ fun MainScreen(
                         letterSpacing = 1.sp
                     )
 
-                    // Row 1 of 2x2 Grid (Root 卡片支持点击和刷新)
+                    // Row 1 of 2x2 Grid (Root 状态卡片：支持点击和刷新)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
