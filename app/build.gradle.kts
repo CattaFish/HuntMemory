@@ -54,7 +54,7 @@ android {
     defaultConfig {
         applicationId = "com.yervant.huntmem"
         minSdk = 29
-        targetSdk = 37
+        targetSdk = 33
         versionCode = 350
         versionName = "3.5.0"
 
@@ -62,7 +62,6 @@ android {
             abiFilters.add("arm64-v8a")
         }
         signingConfig = signingConfigs.getByName("debug")
-        multiDexEnabled = false
 
         // Automatic version extraction for Dependency Credits
         buildConfigField("String", "DEP_VERSION_COMPOSE_BOM", "\"${libs.versions.composeBom.get()}\"")
@@ -102,13 +101,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            multiDexEnabled = true
         }
     }
     compileOptions {
@@ -131,14 +129,6 @@ android {
 
 /**
  * Builds the Rust hmem_jni library for arm64-v8a using cargo-ndk.
- *
- * Requirements:
- *   - rustup target: aarch64-linux-android
- *   - cargo-ndk installed: cargo install cargo-ndk
- *   - Android NDK configured
- *
- * Manual compilation:
- *   cd app/src/main/hmem && cargo ndk -t arm64-v8a build [--release]
  */
 val rustDir = layout.projectDirectory.dir("src/main/hmem")
 val jniDebugArm64Dir = layout.projectDirectory.dir("src/debug/jniLibs/arm64-v8a")
@@ -154,7 +144,7 @@ val fmtRust = tasks.register<Exec>("fmtRust") {
 }
 
 val buildRustDebug = tasks.register<Exec>("buildRustDebug") {
-    description = "Compiles libhmem_jni.so in debug mode for arm64-v8a (fast compilation, debug symbols, debug assertions)"
+    description = "Compiles libhmem_jni.so in debug mode for arm64-v8a"
     group = "rust"
     dependsOn(fmtRust)
     workingDir = rustDir.asFile
@@ -166,7 +156,7 @@ val buildRustDebug = tasks.register<Exec>("buildRustDebug") {
 }
 
 val buildRustRelease = tasks.register<Exec>("buildRustRelease") {
-    description = "Compiles libhmem_jni.so in release mode for arm64-v8a (LTO, opt-level=3, stripped debug info)"
+    description = "Compiles libhmem_jni.so in release mode for arm64-v8a"
     group = "rust"
     dependsOn(fmtRust)
     workingDir = rustDir.asFile
@@ -213,8 +203,6 @@ tasks.matching { it.name == "preDebugBuild" || it.name == "mergeDebugJniLibFolde
 tasks.matching { it.name == "preReleaseBuild" || it.name == "mergeReleaseJniLibFolders" }.configureEach {
     dependsOn(copyRustRelease)
 }
-
-
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))

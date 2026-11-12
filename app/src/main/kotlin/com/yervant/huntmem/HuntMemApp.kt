@@ -38,7 +38,6 @@ class HuntMemApplication : Application() {
 
         Shell.enableVerboseLogging = BuildConfig.DEBUG
 
-        // 参考 Shizuku 做法：不设置 context，不让 libsu 做静默状态预判断，仅保留超时控制
         Shell.setDefaultBuilder(
             Shell.Builder.create()
                 .setTimeout(10)
